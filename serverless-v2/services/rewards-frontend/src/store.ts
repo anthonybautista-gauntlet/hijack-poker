@@ -1,4 +1,5 @@
 import { configureStore, createSlice, PayloadAction } from '@reduxjs/toolkit';
+import { rewardsApi } from './api/rewardsApi';
 
 interface AuthState {
   playerId: string | null;
@@ -25,7 +26,10 @@ export const { login, logout } = authSlice.actions;
 export const store = configureStore({
   reducer: {
     auth: authSlice.reducer,
+    [rewardsApi.reducerPath]: rewardsApi.reducer,
   },
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware().concat(rewardsApi.middleware),
 });
 
 export type RootState = ReturnType<typeof store.getState>;
