@@ -92,6 +92,106 @@ docker compose --profile <your-profile> down -v
 
 ---
 
+## Rewards System (Option A) — Implementation
+
+### What Was Built
+
+A loyalty rewards system where players earn points from gameplay, progress through tiers (Bronze, Silver, Gold, Platinum), and view their status on a web dashboard. This implements **Option A** of the technical challenge.
+
+**Core features:**
+- Points engine with stake-based calculation and tier multipliers
+- Tier progression with immediate upgrades and protected monthly resets
+- Polished React dashboard with tier summary, points history, leaderboard, and tier timeline chart
+- Admin endpoints for point adjustments, tier overrides, and monthly resets
+- Lean REST endpoints for Unity mobile client consumption
+- Idempotent point awards via `handId` GSI with DynamoDB condition expressions
+- Player notifications with auto-expiry (DynamoDB TTL)
+
+### Setup
+
+```bash
+# 1. Start the rewards profile (includes MySQL, Redis, DynamoDB Local, API, Frontend)
+docker compose --profile rewards up
+
+# 2. Seed the rewards tables with demo data (6 players, transactions, leaderboard, etc.)
+npm run seed:rewards
+
+# 3. Open the dashboard
+# Frontend: http://localhost:4000
+# API:      http://localhost:5000/api/v1/health
+```
+
+### API Endpoints
+
+#### Player Endpoints (auth: `X-Player-Id` header)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/player/rewards` | Get player rewards summary (tier, points, progress) |
+| `GET` | `/api/v1/player/rewards/history` | Get paginated points transaction history |
+| `GET` | `/api/v1/player/notifications` | Get player notifications (filterable by unread) |
+| `PATCH` | `/api/v1/player/notifications/:id/dismiss` | Dismiss a notification |
+
+#### Points Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/points/award` | Award points for a hand (idempotent via handId) |
+| `GET` | `/api/v1/leaderboard` | Get monthly leaderboard (top N, optional player rank) |
+
+#### Admin Endpoints (auth: `X-Admin-Key` header)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/admin/players/:playerId/rewards` | Get full player rewards profile |
+| `POST` | `/admin/points/adjust` | Manually adjust player points (positive or negative) |
+| `GET` | `/admin/leaderboard` | Admin leaderboard view |
+| `POST` | `/admin/tier/override` | Override a player's tier with reason |
+| `POST` | `/admin/monthly-reset` | Reset all players' monthly points and recalculate tiers |
+
+### Architecture
+
+The rewards system adds an Express API layer and React frontend on top of the existing infrastructure. Player data is stored in DynamoDB Local (5 tables), with display names denormalized from the existing MySQL `players` table at write time.
+
+**Key architectural decisions:**
+- **DynamoDB table-per-access-pattern**: Separate tables for players, transactions, leaderboard, tier history, and notifications. Each table is optimized for its primary query pattern.
+- **Immutable ledger**: Transactions are append-only. Points are never modified after being written — adjustments are new entries.
+- **Idempotency**: The `handId-index` GSI on `rewards-transactions` prevents duplicate point awards. Uses DynamoDB conditional writes.
+- **Atomic updates**: Player point totals use DynamoDB `ADD` operations (not read-then-write) to prevent lost updates.
+- **Tier floor protection**: Players can only drop one tier per monthly reset (`newTier = max(currentTier - 1, 1)`).
+- **Auto-provisioning**: Players are automatically created in the rewards system on their first point award.
+
+### What's Implemented vs Deferred
+
+| Feature | Status |
+|---------|--------|
+| Points engine (stake brackets + tier multipliers) | Implemented |
+| Tier progression (immediate upgrade, monthly reset) | Implemented |
+| Immutable transaction ledger | Implemented |
+| handId idempotency (GSI + conditional write) | Implemented |
+| Leaderboard (monthly, sorted by points) | Implemented |
+| Tier history (6-month timeline) | Implemented |
+| Notifications (tier changes, milestones, TTL) | Implemented |
+| Admin endpoints (adjust, override, reset) | Implemented |
+| React dashboard (summary, history, leaderboard, timeline) | Implemented |
+| RTK Query integration | Implemented |
+| Player auth | Stub (`X-Player-Id` header, no token verification) |
+| Admin auth | Stub (`X-Admin-Key` header matching env var) |
+| Automated monthly reset (cron) | Deferred — manual endpoint only |
+| Cursor-based pagination | Deferred — uses in-memory offset/limit |
+
+### Running Tests
+
+```bash
+# Backend unit tests (from project root)
+npm --prefix serverless-v2/services/rewards-api test
+
+# Frontend component tests
+npm --prefix serverless-v2/services/rewards-frontend test
+```
+
+---
+
 ## Architecture Overview
 
 ```
