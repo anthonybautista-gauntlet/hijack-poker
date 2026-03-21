@@ -10,6 +10,7 @@ import {
 import EmojiEventsIcon from '@mui/icons-material/EmojiEvents';
 import Dashboard from './pages/Dashboard';
 import Login from './pages/Login';
+import NotificationBell from './components/NotificationBell';
 import { logout } from './store';
 import { useGetPlayerRewardsQuery } from './api/rewardsApi';
 
@@ -39,6 +40,7 @@ function AppNavBar() {
         <Typography variant="h6" fontWeight={700} sx={{ flexGrow: 1 }}>
           Hijack Rewards
         </Typography>
+        <NotificationBell />
         <Typography variant="body2" color="text.secondary" sx={{ mx: 2 }}>
           {displayName}
         </Typography>
