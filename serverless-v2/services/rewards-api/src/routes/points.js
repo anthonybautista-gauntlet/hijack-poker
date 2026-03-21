@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const { Router } = require('express');
 const { validate } = require('../middleware/validate');
 const { awardPointsSchema } = require('../schemas/points.schema');
+const { leaderboardQuerySchema } = require('../schemas/leaderboard.schema');
 const { calculateBasePoints, applyMultiplier } = require('../services/points.service');
 const { checkTierAdvancement, getTierInfo } = require('../services/tier.service');
 const { createTierChangeNotification, checkMilestones } = require('../services/notification.service');
@@ -144,15 +145,60 @@ router.post('/award', validate(awardPointsSchema), async (req, res) => {
 });
 
 /**
- * GET /api/v1/points/leaderboard
+ * GET /api/v1/leaderboard
  *
- * Get the points leaderboard. Candidates implement this.
+ * Get the points leaderboard for a given month.
+ * Includes playerRank if X-Player-Id header is present.
  */
-router.get('/leaderboard', (req, res) => {
-  res.status(501).json({
-    error: 'Not implemented',
-    message: 'Implement leaderboard query here. See challenge docs for requirements.',
-  });
+router.get('/leaderboard', validate(leaderboardQuerySchema), async (req, res) => {
+  try {
+    const { limit, monthKey: rawMonthKey } = req.validated.query;
+    const now = new Date();
+    const monthKey =
+      rawMonthKey || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+    // Query the leaderboard GSI sorted by points descending
+    const entries = await dynamo.queryLeaderboard(monthKey, limit);
+
+    const leaderboard = entries.map((entry, idx) => ({
+      rank: idx + 1,
+      playerId: entry.playerId,
+      displayName: entry.displayName,
+      tier: {
+        level: entry.tier,
+        name: (getTierInfo(entry.tier) || { name: 'Bronze' }).name,
+      },
+      monthlyPoints: entry.monthlyPoints,
+    }));
+
+    // Compute playerRank if X-Player-Id is present
+    let playerRank = null;
+    const playerId = req.headers['x-player-id'];
+    if (playerId) {
+      const fullBoard = await dynamo.getFullLeaderboard(monthKey);
+      const playerIndex = fullBoard.findIndex((e) => e.playerId === playerId);
+      if (playerIndex >= 0) {
+        playerRank = {
+          rank: playerIndex + 1,
+          monthlyPoints: fullBoard[playerIndex].monthlyPoints,
+        };
+      }
+    }
+
+    return res.status(200).json({
+      monthKey,
+      leaderboard,
+      playerRank,
+    });
+  } catch (err) {
+    console.error('Get leaderboard error:', err);
+    return res.status(500).json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to get leaderboard',
+      },
+    });
+  }
 });
 
 module.exports = router;
