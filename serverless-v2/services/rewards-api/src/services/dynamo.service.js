@@ -1,13 +1,14 @@
 'use strict';
 
 const crypto = require('crypto');
-const { PutCommand, GetCommand, QueryCommand, UpdateCommand, ScanCommand } = require('@aws-sdk/lib-dynamodb');
+const { PutCommand, GetCommand, QueryCommand, UpdateCommand, ScanCommand, BatchWriteCommand } = require('@aws-sdk/lib-dynamodb');
 const { docClient } = require('../../shared/config/dynamo');
 
 const PLAYERS_TABLE = process.env.REWARDS_PLAYERS_TABLE || 'rewards-players';
 const TRANSACTIONS_TABLE = process.env.REWARDS_TRANSACTIONS_TABLE || 'rewards-transactions';
 const LEADERBOARD_TABLE = process.env.REWARDS_LEADERBOARD_TABLE || 'rewards-leaderboard';
 const NOTIFICATIONS_TABLE = process.env.REWARDS_NOTIFICATIONS_TABLE || 'rewards-notifications';
+const TIER_HISTORY_TABLE = process.env.REWARDS_TIER_HISTORY_TABLE || 'rewards-tier-history';
 
 /**
  * Get a player's rewards profile.
@@ -204,6 +205,213 @@ async function createNotification(notification) {
   );
 }
 
+/**
+ * Scan all players from rewards-players table (paginated).
+ * @returns {Promise<Array>} All player items
+ */
+async function scanAllPlayers() {
+  const items = [];
+  let lastKey = undefined;
+
+  do {
+    const params = { TableName: PLAYERS_TABLE };
+    if (lastKey) {
+      params.ExclusiveStartKey = lastKey;
+    }
+
+    const result = await docClient.send(new ScanCommand(params));
+    items.push(...(result.Items || []));
+    lastKey = result.LastEvaluatedKey;
+  } while (lastKey);
+
+  return items;
+}
+
+/**
+ * Query tier history for a player.
+ * @param {string} playerId - Player identifier
+ * @param {number} limit - Max entries to return (default 6)
+ * @returns {Promise<Array>} Tier history items, newest first
+ */
+async function getTierHistory(playerId, limit = 6) {
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: TIER_HISTORY_TABLE,
+      KeyConditionExpression: 'playerId = :pid',
+      ExpressionAttributeValues: { ':pid': playerId },
+      ScanIndexForward: false,
+      Limit: limit,
+    })
+  );
+  return result.Items || [];
+}
+
+/**
+ * Batch write tier history items (max 25 per batch, with retry for unprocessed).
+ * @param {Array} items - Array of tier history items
+ */
+async function batchWriteTierHistory(items) {
+  for (let i = 0; i < items.length; i += 25) {
+    const batch = items.slice(i, i + 25);
+    const requestItems = {
+      [TIER_HISTORY_TABLE]: batch.map((item) => ({
+        PutRequest: { Item: item },
+      })),
+    };
+
+    let unprocessed = requestItems;
+    let retries = 0;
+
+    do {
+      const result = await docClient.send(
+        new BatchWriteCommand({ RequestItems: unprocessed })
+      );
+      unprocessed = result.UnprocessedItems || {};
+      retries++;
+    } while (Object.keys(unprocessed).length > 0 && retries < 3);
+  }
+}
+
+/**
+ * Reset a player's monthly points and update tier for monthly reset.
+ * @param {string} playerId - Player identifier
+ * @param {number} newTier - New tier level after reset
+ */
+async function resetPlayerMonth(playerId, newTier) {
+  await docClient.send(
+    new UpdateCommand({
+      TableName: PLAYERS_TABLE,
+      Key: { playerId },
+      UpdateExpression: 'SET monthlyPoints = :zero, currentTier = :tier, updatedAt = :now',
+      ExpressionAttributeValues: {
+        ':zero': 0,
+        ':tier': newTier,
+        ':now': new Date().toISOString(),
+      },
+    })
+  );
+}
+
+/**
+ * Query the leaderboard GSI for a given month, sorted by points descending.
+ * @param {string} monthKey - YYYY-MM
+ * @param {number} limit - Max entries to return
+ * @returns {Promise<Array>} Leaderboard entries sorted by monthlyPoints desc
+ */
+async function queryLeaderboard(monthKey, limit) {
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: LEADERBOARD_TABLE,
+      IndexName: 'monthKey-points-index',
+      KeyConditionExpression: 'monthKey = :mk',
+      ExpressionAttributeValues: { ':mk': monthKey },
+      ScanIndexForward: false,
+      Limit: limit,
+    })
+  );
+  return result.Items || [];
+}
+
+/**
+ * Get all notifications for a player.
+ * @param {string} playerId - Player identifier
+ * @returns {Promise<Array>} Notification items
+ */
+async function getNotifications(playerId) {
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: NOTIFICATIONS_TABLE,
+      KeyConditionExpression: 'playerId = :pid',
+      ExpressionAttributeValues: { ':pid': playerId },
+    })
+  );
+  return result.Items || [];
+}
+
+/**
+ * Dismiss a notification by setting dismissed=true.
+ * Uses a condition expression to verify the item exists and belongs to the player.
+ * @param {string} playerId - Player identifier
+ * @param {string} notificationId - Notification UUID
+ * @returns {Promise<boolean>} true if updated, false if not found
+ */
+async function dismissNotification(playerId, notificationId) {
+  try {
+    await docClient.send(
+      new UpdateCommand({
+        TableName: NOTIFICATIONS_TABLE,
+        Key: { playerId, notificationId },
+        UpdateExpression: 'SET dismissed = :val',
+        ConditionExpression: 'attribute_exists(playerId)',
+        ExpressionAttributeValues: { ':val': true },
+      })
+    );
+    return true;
+  } catch (err) {
+    if (err.name === 'ConditionalCheckFailedException') {
+      return false;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Get all transactions for a player, newest first (paginated fetch).
+ * @param {string} playerId - Player identifier
+ * @returns {Promise<Array>} All transaction items, descending by timestamp
+ */
+async function getTransactionsByPlayer(playerId) {
+  const items = [];
+  let lastKey = undefined;
+
+  do {
+    const params = {
+      TableName: TRANSACTIONS_TABLE,
+      KeyConditionExpression: 'playerId = :pid',
+      ExpressionAttributeValues: { ':pid': playerId },
+      ScanIndexForward: false,
+    };
+    if (lastKey) {
+      params.ExclusiveStartKey = lastKey;
+    }
+
+    const result = await docClient.send(new QueryCommand(params));
+    items.push(...(result.Items || []));
+    lastKey = result.LastEvaluatedKey;
+  } while (lastKey);
+
+  return items;
+}
+
+/**
+ * Get the full leaderboard for a month (for rank computation).
+ * @param {string} monthKey - YYYY-MM
+ * @returns {Promise<Array>} All leaderboard entries for the month, sorted by points desc
+ */
+async function getFullLeaderboard(monthKey) {
+  const items = [];
+  let lastKey = undefined;
+
+  do {
+    const params = {
+      TableName: LEADERBOARD_TABLE,
+      IndexName: 'monthKey-points-index',
+      KeyConditionExpression: 'monthKey = :mk',
+      ExpressionAttributeValues: { ':mk': monthKey },
+      ScanIndexForward: false,
+    };
+    if (lastKey) {
+      params.ExclusiveStartKey = lastKey;
+    }
+
+    const result = await docClient.send(new QueryCommand(params));
+    items.push(...(result.Items || []));
+    lastKey = result.LastEvaluatedKey;
+  } while (lastKey);
+
+  return items;
+}
+
 module.exports = {
   getPlayer,
   putPlayer,
@@ -217,4 +425,13 @@ module.exports = {
   updatePlayerTier,
   upsertLeaderboardEntry,
   createNotification,
+  getNotifications,
+  dismissNotification,
+  scanAllPlayers,
+  getTierHistory,
+  batchWriteTierHistory,
+  resetPlayerMonth,
+  queryLeaderboard,
+  getTransactionsByPlayer,
+  getFullLeaderboard,
 };
