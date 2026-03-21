@@ -2,6 +2,9 @@
 
 const express = require('express');
 const serverless = require('serverless-http');
+const helmet = require('helmet');
+const cors = require('cors');
+const rateLimit = require('express-rate-limit');
 
 const healthRoute = require('./src/routes/health');
 const pointsRoute = require('./src/routes/points');
@@ -10,23 +13,37 @@ const { authMiddleware } = require('./src/middleware/auth');
 
 const app = express();
 
+app.use(helmet());
+app.use(cors({
+  origin: ['http://localhost:4000'],
+  methods: ['GET', 'POST', 'PATCH', 'PUT'],
+  allowedHeaders: ['Content-Type', 'X-Player-Id', 'X-Admin-Key'],
+}));
 app.use(express.json());
 
-// CORS for local frontend
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Player-Id');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  if (req.method === 'OPTIONS') return res.sendStatus(200);
-  next();
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+});
+
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
 });
 
 // Public routes
 app.use('/api/v1/health', healthRoute);
 
 // Protected routes (require auth header)
-app.use('/api/v1/points', authMiddleware, pointsRoute);
-app.use('/api/v1/player', authMiddleware, playerRoute);
+app.use('/api/v1/points', apiLimiter, authMiddleware, pointsRoute);
+app.use('/api/v1/player', apiLimiter, authMiddleware, playerRoute);
+
+// Admin routes (stricter rate limit)
+app.use('/admin', adminLimiter);
 
 // 404 handler
 app.use((req, res) => {
