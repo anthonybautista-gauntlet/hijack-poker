@@ -29,3 +29,7 @@ export const TIER_MULTIPLIERS: Record<number, number> = {
   3: 1.5,
   4: 2.0,
 };
+
+/** Points color indicators */
+export const POINTS_POSITIVE = '#3FB950'; // green — earned points
+export const POINTS_NEGATIVE = '#F85149'; // red — deducted points / adjustments
