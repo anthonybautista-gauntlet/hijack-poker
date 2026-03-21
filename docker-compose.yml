@@ -84,7 +84,9 @@ services:
           --attribute-definitions \
             AttributeName=playerId,AttributeType=S \
             AttributeName=timestamp,AttributeType=N \
+            AttributeName=handId,AttributeType=S \
           --key-schema AttributeName=playerId,KeyType=HASH AttributeName=timestamp,KeyType=RANGE \
+          --global-secondary-indexes '[{"IndexName":"handId-index","KeySchema":[{"AttributeName":"handId","KeyType":"HASH"}],"Projection":{"ProjectionType":"ALL"},"ProvisionedThroughput":{"ReadCapacityUnits":5,"WriteCapacityUnits":5}}]' \
           --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5 \
           2>/dev/null || true
 
@@ -94,7 +96,9 @@ services:
           --attribute-definitions \
             AttributeName=monthKey,AttributeType=S \
             AttributeName=playerId,AttributeType=S \
+            AttributeName=monthlyPoints,AttributeType=N \
           --key-schema AttributeName=monthKey,KeyType=HASH AttributeName=playerId,KeyType=RANGE \
+          --global-secondary-indexes '[{"IndexName":"monthKey-points-index","KeySchema":[{"AttributeName":"monthKey","KeyType":"HASH"},{"AttributeName":"monthlyPoints","KeyType":"RANGE"}],"Projection":{"ProjectionType":"ALL"},"ProvisionedThroughput":{"ReadCapacityUnits":5,"WriteCapacityUnits":5}}]' \
           --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5 \
           2>/dev/null || true
 
@@ -105,6 +109,22 @@ services:
             AttributeName=playerId,AttributeType=S \
             AttributeName=notificationId,AttributeType=S \
           --key-schema AttributeName=playerId,KeyType=HASH AttributeName=notificationId,KeyType=RANGE \
+          --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5 \
+          2>/dev/null || true
+
+        aws dynamodb update-time-to-live \
+          --endpoint-url http://dynamodb-local:8000 \
+          --table-name rewards-notifications \
+          --time-to-live-specification Enabled=true,AttributeName=ttl \
+          2>/dev/null || true
+
+        aws dynamodb create-table \
+          --endpoint-url http://dynamodb-local:8000 \
+          --table-name rewards-tier-history \
+          --attribute-definitions \
+            AttributeName=playerId,AttributeType=S \
+            AttributeName=monthKey,AttributeType=S \
+          --key-schema AttributeName=playerId,KeyType=HASH AttributeName=monthKey,KeyType=RANGE \
           --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5 \
           2>/dev/null || true
 
@@ -293,7 +313,7 @@ services:
     working_dir: /app
     volumes:
       - ./serverless-v2/services/rewards-api:/app
-      - ./serverless-v2/shared:/app/shared
+      - ./serverless-v2/shared:/shared
     depends_on:
       dynamodb-local:
         condition: service_healthy
@@ -302,13 +322,19 @@ services:
       DYNAMODB_ENDPOINT: http://dynamodb-local:8000
       REWARDS_PLAYERS_TABLE: rewards-players
       REWARDS_TRANSACTIONS_TABLE: rewards-transactions
+      ADMIN_API_KEY: admin-secret-key
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: hijack
+      MYSQL_PASSWORD: hijack_dev
+      MYSQL_DATABASE: hijack_poker
       AWS_REGION: us-east-1
       AWS_ACCESS_KEY_ID: local
       AWS_SECRET_ACCESS_KEY: local
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        npm install && npx serverless offline --config serverless.offline.yml --host 0.0.0.0
+        npm install && ln -sf /app/node_modules /shared/node_modules && npx serverless offline --config serverless.offline.yml --host 0.0.0.0
 
   rewards-frontend:
     image: node:22-alpine

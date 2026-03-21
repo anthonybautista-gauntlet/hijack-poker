@@ -11,5 +11,9 @@
     "seed:rewards": "node scripts/seed-rewards.js",
     "seed:streaks": "node scripts/seed-streaks.js",
     "simulate:hands": "node scripts/simulate-hands.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1014.0",
+    "@aws-sdk/lib-dynamodb": "^3.1014.0"
   }
 }

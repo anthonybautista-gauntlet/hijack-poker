@@ -42,4 +42,28 @@ function getNextTier(currentTierName) {
   return Object.values(TIERS).find((t) => t.name === nextName);
 }
 
-module.exports = { TIERS, POINT_RULES, getTierForPoints, getNextTier };
+/**
+ * Milestone definitions — lifetime points thresholds that trigger notifications.
+ */
+const MILESTONES = [
+  { points: 100, name: 'First Steps', message: "You've earned 100 lifetime points!" },
+  { points: 500, name: 'Rising Star', message: '500 lifetime points — keep it up!' },
+  { points: 1000, name: 'High Roller', message: '1,000 lifetime points earned!' },
+  { points: 5000, name: 'Point Master', message: '5,000 lifetime points — impressive!' },
+  { points: 10000, name: 'Legend', message: '10,000 lifetime points achieved!' },
+];
+
+/**
+ * Standard error codes for API responses.
+ */
+const ERROR_CODES = {
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+  PLAYER_NOT_FOUND: 'PLAYER_NOT_FOUND',
+  DUPLICATE_HAND: 'DUPLICATE_HAND',
+  UNAUTHORIZED: 'UNAUTHORIZED',
+  FORBIDDEN: 'FORBIDDEN',
+  INTERNAL_ERROR: 'INTERNAL_ERROR',
+  RATE_LIMITED: 'RATE_LIMITED',
+};
+
+module.exports = { TIERS, POINT_RULES, getTierForPoints, getNextTier, MILESTONES, ERROR_CODES };
