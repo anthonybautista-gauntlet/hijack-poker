@@ -68,18 +68,21 @@ async function createNewGame(tableId) {
 
     if (allPlayers.length < 2) return null;
 
-    // Get next game number
+    // Get next game number and carry over the dealer seat from the last game
     const [lastGame] = await sequelize.query(
-      `SELECT COALESCE(MAX(game_no), 0) + 1 as next_no FROM games WHERE table_id = :tableId`,
+      `SELECT COALESCE(MAX(game_no), 0) + 1 as next_no,
+              (SELECT dealer_seat FROM games WHERE table_id = :tableId ORDER BY game_no DESC LIMIT 1) as last_dealer
+       FROM games WHERE table_id = :tableId`,
       { replacements: { tableId }, type: QueryTypes.SELECT }
     );
     const nextGameNo = lastGame?.next_no || 1;
+    const lastDealerSeat = parseInt(lastGame?.last_dealer, 10) || 0;
 
-    // Insert game record
+    // Insert game record — use previous dealer seat so setupDealer rotates correctly
     const [gameId] = await sequelize.query(
       `INSERT INTO games (table_id, game_no, hand_step, dealer_seat, pot, status)
-       VALUES (:tableId, :gameNo, 0, 1, 0, 'in_progress')`,
-      { replacements: { tableId, gameNo: nextGameNo }, type: QueryTypes.INSERT }
+       VALUES (:tableId, :gameNo, 0, :dealerSeat, 0, 'in_progress')`,
+      { replacements: { tableId, gameNo: nextGameNo, dealerSeat: lastDealerSeat }, type: QueryTypes.INSERT }
     );
 
     // Insert game players
